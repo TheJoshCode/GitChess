@@ -19,7 +19,7 @@
             box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
         }
         
-        #auth-panel { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 400px; }
+        #auth-panel { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; text-align: center; }
         #lobby-panel { top: 20px; left: 20px; width: 350px; max-height: 80vh; overflow-y: auto; display: none; }
         #game-ui { top: 20px; right: 20px; display: none; }
         
@@ -43,13 +43,12 @@
             margin: 5px 0;
             cursor: pointer;
             transition: all 0.2s;
+            font-size: 12px;
         }
         .game-item:hover { background: rgba(0, 255, 0, 0.1); }
         
-        #status { position: fixed; bottom: 20px; left: 20px; z-index: 100; font-size: 12px; }
-        #turn-indicator { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
-        
-        .hidden { display: none !important; }
+        #status { position: fixed; bottom: 20px; left: 20px; z-index: 100; font-size: 12px; max-width: 80%; }
+        #turn-indicator { font-size: 20px; font-weight: bold; margin-bottom: 10px; }
         
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #000; }
@@ -60,26 +59,24 @@
     <div id="canvas-container"></div>
     
     <div id="auth-panel" class="panel">
-        <h2>GitChess // Secure Connection</h2>
-        <input type="password" id="pat-input" placeholder="GitHub PAT">
-        <input type="password" id="crypto-key" placeholder="Encryption Key">
-        <button onclick="app.authenticate()">Initialize</button>
-        <div style="font-size: 10px; margin-top: 10px; opacity: 0.7;">
-            PAT is encrypted client-side. Repo: owner/gitchess-data
-        </div>
+        <h2>// GitChess</h2>
+        <div style="font-size: 10px; margin-bottom: 15px; opacity: 0.7;">Secure P2P Chess via GitHub</div>
+        <input type="text" id="username" placeholder="Enter Username" autocomplete="off">
+        <button onclick="app.authenticate()" id="auth-btn">Connect</button>
     </div>
 
     <div id="lobby-panel" class="panel">
-        <h3>Active Games</h3>
+        <h3>> Active Games</h3>
         <div id="games-list"></div>
-        <button onclick="app.createGame()" style="margin-top: 10px;">Create Game</button>
-        <button onclick="app.refreshLobby()">Refresh</button>
+        <button onclick="app.createGame()" style="margin-top: 10px;">[+] Create Game</button>
+        <button onclick="app.refreshLobby()">[@] Refresh</button>
     </div>
 
     <div id="game-ui" class="panel">
         <div id="turn-indicator">WHITE TO MOVE</div>
-        <div id="game-id" style="font-size: 10px; margin-bottom: 10px;"></div>
-        <button onclick="app.leaveGame()">Leave Game</button>
+        <div id="game-info" style="font-size: 10px; margin-bottom: 10px;"></div>
+        <div id="connection-status" style="font-size: 10px; margin-bottom: 10px; color: #ff0;">Connecting...</div>
+        <button onclick="app.leaveGame()">[X] Leave Game</button>
     </div>
 
     <div id="status">Initializing...</div>
@@ -97,48 +94,37 @@
         import * as THREE from 'three';
         import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
-        // --- CRYPTO UTILS ---
-        const Crypto = {
-            async deriveKey(password) {
-                const enc = new TextEncoder();
-                const keyMaterial = await crypto.subtle.importKey(
-                    'raw', enc.encode(password), {name: 'PBKDF2'}, false, ['deriveKey']
-                );
-                return crypto.subtle.deriveKey(
-                    {name: 'PBKDF2', salt: enc.encode('gitchess'), iterations: 100000, hash: 'SHA-256'},
-                    keyMaterial, {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt']
-                );
-            },
-            async encrypt(text, password) {
-                const key = await this.deriveKey(password);
-                const iv = crypto.getRandomValues(new Uint8Array(12));
-                const enc = new TextEncoder();
-                const ciphertext = await crypto.subtle.encrypt(
-                    {name: 'AES-GCM', iv}, key, enc.encode(text)
-                );
-                const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-                combined.set(iv); combined.set(new Uint8Array(ciphertext), iv.length);
-                return btoa(String.fromCharCode(...combined));
-            },
-            async decrypt(encrypted, password) {
-                const key = await this.deriveKey(password);
-                const data = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
-                const iv = data.slice(0, 12);
-                const ciphertext = data.slice(12);
-                const decrypted = await crypto.subtle.decrypt(
-                    {name: 'AES-GCM', iv}, key, ciphertext
-                );
-                return new TextDecoder().decode(decrypted);
-            }
-        };
+        // === CONFIGURATION - PASTE YOUR ENCRYPTED DATA HERE ===
+        const ENCRYPTED_PAT = 'yRDjZO3jWj6gmerPf0HsACIq4vfi01lDpyzDAwKSsrBgQLlT8/syf2APRnnVmjy/pNxhinU4PfPqA7s4GmuRBghmjoKyT1jMDcBRIdgllo7Lo1qEMJmAQI6gjuAoMKee4nMF7HPWRPjRCE2/UUdZIHGQdBO0/WnyKilMGCx/eCMSTQaqt6aw1RQ=';  // PASTE ENCRYPTED BLOB HERE
+        const PAT_PASSPHRASE = '35e1c2cf-5d51-4c2b-9a21-0122cdf2ff46'; // PASTE ENCRYPTION PASSWORD HERE
+        const REPO_OWNER = 'TheJoshCode';
+        const REPO_NAME = 'GitChess';
+        // =====================================================
+
+        // --- CRYPTO ---
+        async function decryptPAT(encryptedBase64, password) {
+            const data = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+            const salt = data.slice(0, 16);
+            const iv = data.slice(16, 28);
+            const ciphertext = data.slice(28);
+            
+            const enc = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+            const key = await crypto.subtle.deriveKey(
+                {name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256'},
+                keyMaterial, {name: 'AES-GCM', length: 256}, false, ['decrypt']
+            );
+            
+            const decrypted = await crypto.subtle.decrypt({name: 'AES-GCM', iv}, key, ciphertext);
+            return new TextDecoder().decode(decrypted);
+        }
 
         // --- GITHUB API ---
         class GitHubAPI {
-            constructor(token) {
+            constructor(token, username) {
                 this.token = token;
-                this.owner = localStorage.getItem('gitchess_repo_owner') || 'YOUR_USERNAME';
-                this.repo = 'gitchess-data';
-                this.base = `https://api.github.com/repos/${this.owner}/${this.repo}`;
+                this.username = username;
+                this.base = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
             }
 
             async request(path, opts = {}) {
@@ -153,35 +139,34 @@
                 });
                 if (!res.ok) {
                     const err = await res.text();
-                    throw new Error(`GitHub API ${res.status}: ${err}`);
+                    throw new Error(`GitHub ${res.status}: ${err}`);
                 }
+                if (res.status === 204) return null;
                 return res.json();
             }
 
-            async createGame(gameId, isHost) {
+            async createGame(gameId) {
                 const content = btoa(JSON.stringify({
                     status: 'waiting',
-                    host: isHost,
+                    host: this.username,
                     created: Date.now(),
                     fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
                     moves: [],
                     offer: null,
                     answer: null,
-                    ice: []
+                    ice: [],
+                    lastActivity: Date.now()
                 }));
                 return this.request(`/contents/games/${gameId}.json`, {
                     method: 'PUT',
-                    body: JSON.stringify({message: `Create game ${gameId}`, content})
+                    body: JSON.stringify({message: `Create ${gameId}`, content})
                 });
             }
 
             async getGame(gameId) {
                 try {
                     const data = await this.request(`/contents/games/${gameId}.json`);
-                    return {
-                        ...data,
-                        content: JSON.parse(atob(data.content))
-                    };
+                    return {...data, content: JSON.parse(atob(data.content))};
                 } catch (e) {
                     if (e.message.includes('404')) return null;
                     throw e;
@@ -192,18 +177,14 @@
                 const content = btoa(JSON.stringify(contentObj));
                 return this.request(`/contents/games/${gameId}.json`, {
                     method: 'PUT',
-                    body: JSON.stringify({
-                        message: `Update game ${gameId}`,
-                        content,
-                        sha
-                    })
+                    body: JSON.stringify({message: `Update ${gameId}`, content, sha})
                 });
             }
 
             async deleteGame(gameId, sha) {
                 return this.request(`/contents/games/${gameId}.json`, {
                     method: 'DELETE',
-                    body: JSON.stringify({message: `End game ${gameId}`, sha})
+                    body: JSON.stringify({message: `End ${gameId}`, sha})
                 });
             }
 
@@ -219,16 +200,10 @@
 
         // --- CHESS ENGINE ---
         class Chess {
-            constructor() {
-                this.reset();
-            }
-
+            constructor() { this.reset(); }
+            
             reset() {
-                this.board = [];
-                for (let y = 0; y < 8; y++) {
-                    this.board[y] = [];
-                    for (let x = 0; x < 8; x++) this.board[y][x] = null;
-                }
+                this.board = Array(8).fill(null).map(() => Array(8).fill(null));
                 this.loadFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
                 this.turn = 'white';
             }
@@ -243,7 +218,7 @@
                         else {
                             const color = char === char.toUpperCase() ? 'white' : 'black';
                             const type = char.toLowerCase();
-                            this.board[y][x] = {type, color, id: Math.random().toString(36).substr(2, 9)};
+                            this.board[y][x] = {type, color, id: `${type}-${x}-${y}-${Date.now()}`};
                             x++;
                         }
                     }
@@ -260,8 +235,7 @@
                         if (!p) empty++;
                         else {
                             if (empty) { fen += empty; empty = 0; }
-                            const c = p.type;
-                            fen += p.color === 'white' ? c.toUpperCase() : c;
+                            fen += p.color === 'white' ? p.type.toUpperCase() : p.type;
                         }
                     }
                     if (empty) fen += empty;
@@ -295,34 +269,11 @@
                         });
                         break;
                     }
-                    case 'n': {
-                        [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(([dx,dy]) => {
-                            add(x+dx, y+dy);
-                        });
-                        break;
-                    }
-                    case 'b': {
-                        [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dx,dy]) => {
-                            for (let i = 1; i < 8; i++) if (!add(x+dx*i, y+dy*i)) break;
-                        });
-                        break;
-                    }
-                    case 'r': {
-                        [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => {
-                            for (let i = 1; i < 8; i++) if (!add(x+dx*i, y+dy*i)) break;
-                        });
-                        break;
-                    }
-                    case 'q': {
-                        [[1,1],[1,-1],[-1,1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => {
-                            for (let i = 1; i < 8; i++) if (!add(x+dx*i, y+dy*i)) break;
-                        });
-                        break;
-                    }
-                    case 'k': {
-                        [[1,1],[1,0],[1,-1],[0,1],[0,-1],[-1,1],[-1,0],[-1,-1]].forEach(([dx,dy]) => add(x+dx,y+dy));
-                        break;
-                    }
+                    case 'n': [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(([dx,dy]) => add(x+dx,y+dy)); break;
+                    case 'b': [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dx,dy]) => { for(let i=1;i<8;i++) if(!add(x+dx*i,y+dy*i)) break; }); break;
+                    case 'r': [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => { for(let i=1;i<8;i++) if(!add(x+dx*i,y+dy*i)) break; }); break;
+                    case 'q': [[1,1],[1,-1],[-1,1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => { for(let i=1;i<8;i++) if(!add(x+dx*i,y+dy*i)) break; }); break;
+                    case 'k': [[1,1],[1,0],[1,-1],[0,1],[0,-1],[-1,1],[-1,0],[-1,-1]].forEach(([dx,dy]) => add(x+dx,y+dy)); break;
                 }
                 return moves;
             }
@@ -330,9 +281,7 @@
             move(from, to) {
                 const p = this.board[from.y][from.x];
                 if (!p || p.color !== this.turn) return false;
-                const legal = this.getMoves(from.x, from.y).some(m => m.x === to.x && m.y === to.y);
-                if (!legal) return false;
-                
+                if (!this.getMoves(from.x, from.y).some(m => m.x === to.x && m.y === to.y)) return false;
                 this.board[to.y][to.x] = p;
                 this.board[from.y][from.x] = null;
                 this.turn = this.turn === 'white' ? 'black' : 'white';
@@ -340,32 +289,43 @@
             }
         }
 
-        // --- WEBRTC P2P ---
+        // --- WEBRTC ---
         class P2P {
             constructor(github, gameId, isHost) {
                 this.github = github;
                 this.gameId = gameId;
                 this.isHost = isHost;
-                this.conn = new RTCPeerConnection({
-                    iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
-                });
+                this.conn = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}]});
                 this.channel = null;
                 this.onMove = null;
+                this.connected = false;
                 this.setup();
             }
 
             setup() {
                 this.conn.onicecandidate = async (e) => {
                     if (!e.candidate) return;
-                    const game = await this.github.getGame(this.gameId);
-                    if (!game) return;
-                    const ice = game.content.ice || [];
-                    ice.push({candidate: e.candidate, from: this.isHost ? 'host' : 'guest'});
-                    await this.github.updateGame(this.gameId, game.sha, {...game.content, ice});
+                    try {
+                        const game = await this.github.getGame(this.gameId);
+                        if (!game) return;
+                        const ice = game.content.ice || [];
+                        if (ice.length > 20) return; // Limit ICE candidates
+                        ice.push({c: e.candidate.candidate, t: Date.now(), f: this.isHost ? 'h' : 'g'});
+                        await this.github.updateGame(this.gameId, game.sha, {...game.content, ice});
+                    } catch(err) { console.error('ICE save failed', err); }
+                };
+
+                this.conn.onconnectionstatechange = () => {
+                    if (this.conn.connectionState === 'connected') {
+                        this.connected = true;
+                        updateStatus('P2P: Connected (Realtime)');
+                        document.getElementById('connection-status').innerText = 'P2P: Connected';
+                        document.getElementById('connection-status').style.color = '#0f0';
+                    }
                 };
 
                 if (this.isHost) {
-                    this.channel = this.conn.createDataChannel('moves', {negotiated: false, id: 0});
+                    this.channel = this.conn.createDataChannel('m', {ordered: true});
                     this.setupChannel();
                 } else {
                     this.conn.ondatachannel = (e) => {
@@ -377,10 +337,16 @@
 
             setupChannel() {
                 this.channel.onmessage = (e) => {
-                    const data = JSON.parse(e.data);
-                    if (data.type === 'move' && this.onMove) this.onMove(data);
+                    try {
+                        const data = JSON.parse(e.data);
+                        if (data.t === 'm' && this.onMove) this.onMove(data);
+                    } catch(err) { console.error('P2P msg error', err); }
                 };
-                this.channel.onopen = () => updateStatus('P2P Connected - Realtime Active');
+                this.channel.onopen = () => {
+                    this.connected = true;
+                    document.getElementById('connection-status').innerText = 'P2P: Connected';
+                    document.getElementById('connection-status').style.color = '#0f0';
+                };
             }
 
             async connect() {
@@ -388,48 +354,53 @@
                     const offer = await this.conn.createOffer();
                     await this.conn.setLocalDescription(offer);
                     const game = await this.github.getGame(this.gameId);
-                    await this.github.updateGame(this.gameId, game.sha, {...game.content, offer});
+                    await this.github.updateGame(this.gameId, game.sha, {...game.content, offer: {t: offer.type, s: offer.sdp}});
                     
                     // Poll for answer
                     const poll = setInterval(async () => {
-                        const g = await this.github.getGame(this.gameId);
-                        if (g.content.answer && !this.conn.remoteDescription) {
-                            await this.conn.setRemoteDescription(new RTCSessionDescription(g.content.answer));
-                            clearInterval(poll);
-                        }
-                        // Process ICE
-                        g.content.ice?.forEach(cand => {
-                            if (cand.from !== 'host') this.conn.addIceCandidate(new RTCIceCandidate(cand.candidate));
-                        });
+                        try {
+                            const g = await this.github.getGame(this.gameId);
+                            if (g.content.answer && !this.conn.remoteDescription) {
+                                await this.conn.setRemoteDescription(new RTCSessionDescription(g.content.answer));
+                            }
+                            if (g.content.ice) {
+                                g.content.ice.filter(c => c.f !== 'h').forEach(c => {
+                                    try { this.conn.addIceCandidate(new RTCIceCandidate({candidate: c.c})); } catch(e) {}
+                                });
+                            }
+                            if (this.conn.connectionState === 'connected') clearInterval(poll);
+                        } catch(e) { console.error(e); }
                     }, 1000);
                 } else {
-                    // Guest: get offer, send answer
-                    const checkOffer = async () => {
-                        const game = await this.github.getGame(this.gameId);
-                        if (game.content.offer && !this.conn.remoteDescription) {
-                            await this.conn.setRemoteDescription(new RTCSessionDescription(game.content.offer));
-                            const answer = await this.conn.createAnswer();
-                            await this.conn.setLocalDescription(answer);
-                            await this.github.updateGame(this.gameId, game.sha, {...game.content, answer});
-                        }
-                        // Process ICE
-                        game.content.ice?.forEach(cand => {
-                            if (cand.from !== 'guest') this.conn.addIceCandidate(new RTCIceCandidate(cand.candidate));
-                        });
-                        if (!this.conn.remoteDescription) setTimeout(checkOffer, 1000);
+                    const check = async () => {
+                        try {
+                            const g = await this.github.getGame(this.gameId);
+                            if (g.content.offer && !this.conn.remoteDescription) {
+                                await this.conn.setRemoteDescription(new RTCSessionDescription(g.content.offer));
+                                const answer = await this.conn.createAnswer();
+                                await this.conn.setLocalDescription(answer);
+                                await this.github.updateGame(this.gameId, g.sha, {...g.content, answer: {t: answer.type, s: answer.sdp}});
+                            }
+                            if (g.content.ice) {
+                                g.content.ice.filter(c => c.f !== 'g').forEach(c => {
+                                    try { this.conn.addIceCandidate(new RTCIceCandidate({candidate: c.c})); } catch(e) {}
+                                });
+                            }
+                            if (!this.conn.remoteDescription) setTimeout(check, 1000);
+                        } catch(e) { console.error(e); }
                     };
-                    checkOffer();
+                    check();
                 }
             }
 
             sendMove(move) {
                 if (this.channel?.readyState === 'open') {
-                    this.channel.send(JSON.stringify({type: 'move', ...move}));
+                    this.channel.send(JSON.stringify({t: 'm', ...move}));
                 }
             }
         }
 
-        // --- THREE.JS SCENE ---
+        // --- 3D SCENE ---
         class Scene3D {
             constructor(onMove) {
                 this.onMove = onMove;
@@ -437,21 +408,22 @@
                 this.camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
                 this.renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
-                this.renderer.setPixelRatio(window.devicePixelRatio);
-                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.renderer.shadowMap.enabled = true;
                 document.getElementById('canvas-container').appendChild(this.renderer.domElement);
 
-                this.camera.position.set(0, 12, 12);
+                this.camera.position.set(0, 10, 8);
                 this.camera.lookAt(0, 0, 0);
                 
                 this.raycaster = new THREE.Raycaster();
                 this.mouse = new THREE.Vector2();
                 this.pieces = [];
+                this.squares = [];
                 this.selected = null;
                 this.validMoves = [];
+                this.myColor = null;
                 
                 this.setupLights();
-                this.loadSkybox();
                 this.createBoard();
                 this.setupInteraction();
                 
@@ -466,53 +438,126 @@
                 dir.position.set(5, 10, 5);
                 dir.castShadow = true;
                 this.scene.add(dir);
-            }
-
-            loadSkybox() {
-                new THREE.TextureLoader().load('studio_skybox.jpg', (tex) => {
-                    this.scene.environment = tex;
-                    this.scene.background = tex;
-                });
+                const spot = new THREE.SpotLight(0x00ff00, 0.5);
+                spot.position.set(-5, 8, -5);
+                this.scene.add(spot);
             }
 
             createBoard() {
-                // Load chessboard FBX
-                const loader = new FBXLoader();
-                loader.load('chessboard.fbx', (fbx) => {
-                    fbx.scale.set(0.1, 0.1, 0.1);
-                    this.scene.add(fbx);
-                });
-                
-                // Invisible squares for raycasting
-                const geometry = new THREE.PlaneGeometry(1, 1);
+                // Board base
+                const geometry = new THREE.BoxGeometry(8, 0.2, 8);
+                const material = new THREE.MeshStandardMaterial({color: 0x222222});
+                const board = new THREE.Mesh(geometry, material);
+                board.position.y = -0.1;
+                this.scene.add(board);
+
+                // Squares
+                const sqGeom = new THREE.PlaneGeometry(0.95, 0.95);
                 for(let y=0; y<8; y++) {
                     for(let x=0; x<8; x++) {
-                        const mat = new THREE.MeshBasicMaterial({
-                            visible: false,
-                            transparent: true,
-                            opacity: 0.3,
-                            color: 0x00ff00
+                        const isWhite = (x+y)%2 === 0;
+                        const mat = new THREE.MeshStandardMaterial({
+                            color: isWhite ? 0xdddddd : 0x444444,
+                            roughness: 0.8
                         });
-                        const square = new THREE.Mesh(geometry, mat);
-                        square.position.set(x - 3.5, 0.1, y - 3.5);
-                        square.userData = {x, y};
-                        this.scene.add(square);
+                        const sq = new THREE.Mesh(sqGeom, mat);
+                        sq.rotation.x = -Math.PI/2;
+                        sq.position.set(x-3.5, 0.01, y-3.5);
+                        sq.userData = {x, y};
+                        this.scene.add(sq);
+                        this.squares.push(sq);
                     }
                 }
             }
 
-            loadPieces(chess) {
+            loadFBXPieces(callback) {
                 const loader = new FBXLoader();
-                const types = ['king', 'queen', 'rook', 'bishop', 'knight', 'pawn'];
-                this.pieceMeshes = {};
-                
-                types.forEach(type => {
-                    loader.load(`${type}.fbx`, (fbx) => {
-                        fbx.scale.set(0.08, 0.08, 0.08);
-                        this.pieceMeshes[type] = fbx;
-                        this.updatePieces(chess);
+                const pieces = {};
+                const toLoad = [
+                    {f: 'king.fbx', t: 'k', s: 0.004},
+                    {f: 'queen.fbx', t: 'q', s: 0.004},
+                    {f: 'rook.fbx', t: 'r', s: 0.0035},
+                    {f: 'bishop.fbx', t: 'b', s: 0.0035},
+                    {f: 'knight.fbx', t: 'n', s: 0.0035},
+                    {f: 'pawn.fbx', t: 'p', s: 0.003}
+                ];
+                let loaded = 0;
+                toLoad.forEach(item => {
+                    loader.load(item.f, (fbx) => {
+                        fbx.scale.set(item.s, item.s, item.s);
+                        pieces[item.t] = fbx;
+                        loaded++;
+                        if (loaded === toLoad.length && callback) callback(pieces);
+                    }, undefined, () => {
+                        // Fallback to primitives if FBX fails
+                        loaded++;
+                        if (loaded === toLoad.length && callback) callback(pieces);
                     });
                 });
+                setTimeout(() => { if(loaded < toLoad.length && callback) callback(pieces); }, 5000);
+            }
+
+            createPrimitivePiece(type, color) {
+                const group = new THREE.Group();
+                let mesh;
+                const mat = new THREE.MeshStandardMaterial({
+                    color: color === 'white' ? 0xffffff : 0x111111,
+                    roughness: 0.3,
+                    metalness: 0.2
+                });
+                
+                switch(type) {
+                    case 'p': // Pawn
+                        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 0.6, 8), mat);
+                        mesh.position.y = 0.3;
+                        group.add(mesh);
+                        mesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), mat);
+                        mesh.position.y = 0.7;
+                        group.add(mesh);
+                        break;
+                    case 'r': // Rook
+                        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.35, 0.8, 8), mat);
+                        mesh.position.y = 0.4;
+                        group.add(mesh);
+                        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.2, 8), mat);
+                        mesh.position.y = 0.9;
+                        group.add(mesh);
+                        break;
+                    case 'n': // Knight
+                        mesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.7, 0.4), mat);
+                        mesh.position.y = 0.35;
+                        mesh.rotation.y = Math.PI/4;
+                        group.add(mesh);
+                        break;
+                    case 'b': // Bishop
+                        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.3, 0.8, 8), mat);
+                        mesh.position.y = 0.4;
+                        group.add(mesh);
+                        mesh = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.3, 8), mat);
+                        mesh.position.y = 0.9;
+                        group.add(mesh);
+                        break;
+                    case 'q': // Queen
+                        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 1.2, 8), mat);
+                        mesh.position.y = 0.6;
+                        group.add(mesh);
+                        mesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), mat);
+                        mesh.position.y = 1.3;
+                        group.add(mesh);
+                        break;
+                    case 'k': // King
+                        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.38, 1.3, 8), mat);
+                        mesh.position.y = 0.65;
+                        group.add(mesh);
+                        mesh = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.2, 0.1), mat);
+                        mesh.position.y = 1.4;
+                        group.add(mesh);
+                        mesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.1), mat);
+                        mesh.position.y = 1.4;
+                        group.add(mesh);
+                        break;
+                }
+                return group;
             }
 
             updatePieces(chess) {
@@ -523,11 +568,9 @@
                 for(let y=0; y<8; y++) {
                     for(let x=0; x<8; x++) {
                         const p = chess.board[y][x];
-                        if (p && this.pieceMeshes[p.type]) {
-                            const mesh = this.pieceMeshes[p.type].clone();
-                            mesh.position.set(x - 3.5, 0.5, y - 3.5);
-                            mesh.material = mesh.material.clone();
-                            mesh.material.color.setHex(p.color === 'white' ? 0xffffff : 0x333333);
+                        if (p) {
+                            const mesh = this.createPrimitivePiece(p.type, p.color);
+                            mesh.position.set(x-3.5, 0, y-3.5);
                             mesh.userData = {x, y, piece: p};
                             this.scene.add(mesh);
                             this.pieces.push(mesh);
@@ -537,43 +580,55 @@
             }
 
             showValidMoves(moves) {
-                // Remove old indicators
                 this.validMoves.forEach(m => this.scene.remove(m));
                 this.validMoves = [];
-                
                 const geom = new THREE.RingGeometry(0.3, 0.4, 16);
-                const mat = new THREE.MeshBasicMaterial({color: 0x00ff00, side: THREE.DoubleSide});
+                const mat = new THREE.MeshBasicMaterial({color: 0x00ff00, side: THREE.DoubleSide, transparent: true, opacity: 0.6});
                 moves.forEach(m => {
                     const ring = new THREE.Mesh(geom, mat);
                     ring.rotation.x = -Math.PI/2;
-                    ring.position.set(m.x - 3.5, 0.05, m.y - 3.5);
+                    ring.position.set(m.x-3.5, 0.02, m.y-3.5);
                     this.scene.add(ring);
                     this.validMoves.push(ring);
                 });
             }
 
+            highlightSquare(x, y, color) {
+                const geom = new THREE.PlaneGeometry(0.9, 0.9);
+                const mat = new THREE.MeshBasicMaterial({color: color, transparent: true, opacity: 0.3, side: THREE.DoubleSide});
+                const mesh = new THREE.Mesh(geom, mat);
+                mesh.rotation.x = -Math.PI/2;
+                mesh.position.set(x-3.5, 0.03, y-3.5);
+                this.scene.add(mesh);
+                setTimeout(() => this.scene.remove(mesh), 500);
+            }
+
             setupInteraction() {
-                this.renderer.domElement.addEventListener('click', (e) => {
+                this.renderer.domElement.addEventListener('pointerdown', (e) => {
                     this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
                     this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
                     this.raycaster.setFromCamera(this.mouse, this.camera);
                     
-                    // Intersect with pieces
-                    const pieceIntersects = this.raycaster.intersectObjects(this.pieces);
-                    if (pieceIntersects.length > 0) {
-                        const p = pieceIntersects[0].object.userData;
-                        this.selected = p;
-                        const moves = app.chess.getMoves(p.x, p.y);
-                        this.showValidMoves(moves);
-                        return;
+                    const pieceHits = this.raycaster.intersectObjects(this.pieces, true);
+                    if (pieceHits.length > 0) {
+                        let obj = pieceHits[0].object;
+                        while(obj.parent && !obj.userData.piece) obj = obj.parent;
+                        if (obj.userData.piece) {
+                            this.selected = obj.userData;
+                            const moves = app.chess.getMoves(this.selected.x, this.selected.y);
+                            this.showValidMoves(moves);
+                            this.highlightSquare(this.selected.x, this.selected.y, 0xffff00);
+                            return;
+                        }
                     }
                     
-                    // Intersect with squares
-                    const squares = this.scene.children.filter(c => c.userData?.x !== undefined);
-                    const intersects = this.raycaster.intersectObjects(squares);
-                    if (intersects.length > 0 && this.selected) {
-                        const target = intersects[0].object.userData;
+                    const squareHits = this.raycaster.intersectObjects(this.squares);
+                    if (squareHits.length > 0 && this.selected) {
+                        const target = squareHits[0].object.userData;
                         this.onMove(this.selected, target);
+                        this.selected = null;
+                        this.showValidMoves([]);
+                    } else {
                         this.selected = null;
                         this.showValidMoves([]);
                     }
@@ -602,58 +657,77 @@
                 this.gameId = null;
                 this.isHost = false;
                 this.myColor = null;
+                this.username = null;
                 this.polling = null;
+                this.lastMoveTime = 0;
             }
 
             async authenticate() {
-                const pat = document.getElementById('pat-input').value;
-                const key = document.getElementById('crypto-key').value;
+                if (!ENCRYPTED_PAT || !PAT_PASSPHRASE) {
+                    alert('Configure ENCRYPTED_PAT and PAT_PASSPHRASE in source code first!');
+                    return;
+                }
+                
+                const username = document.getElementById('username').value.trim();
+                if (!username) return alert('Enter username');
+                this.username = username;
                 
                 try {
-                    updateStatus('Encrypting credentials...');
-                    const encrypted = await Crypto.encrypt(pat, key);
-                    localStorage.setItem('gitchess_pat', encrypted);
-                    
-                    const decrypted = await Crypto.decrypt(encrypted, key);
-                    this.github = new GitHubAPI(decrypted);
-                    
-                    // Test connection
+                    updateStatus('Decrypting credentials...');
+                    const pat = await decryptPAT(ENCRYPTED_PAT, PAT_PASSPHRASE);
+                    updateStatus('Connecting to GitHub...');
+                    this.github = new GitHubAPI(pat, username);
                     await this.github.listGames();
                     
                     document.getElementById('auth-panel').style.display = 'none';
                     document.getElementById('lobby-panel').style.display = 'block';
-                    updateStatus('Connected to GitHub');
+                    updateStatus('Connected as ' + username);
                     this.refreshLobby();
                 } catch (e) {
                     alert('Auth failed: ' + e.message);
+                    console.error(e);
                 }
             }
 
             async refreshLobby() {
-                const games = await this.github.listGames();
-                const list = document.getElementById('games-list');
-                list.innerHTML = '';
-                games.forEach(g => {
-                    const div = document.createElement('div');
-                    div.className = 'game-item';
-                    div.innerHTML = `<div>${g}</div><div style="font-size:10px">Click to Join</div>`;
-                    div.onclick = () => this.joinGame(g);
-                    list.appendChild(div);
-                });
+                try {
+                    const games = await this.github.listGames();
+                    const list = document.getElementById('games-list');
+                    list.innerHTML = '';
+                    
+                    for (const g of games) {
+                        const data = await this.github.getGame(g);
+                        const div = document.createElement('div');
+                        div.className = 'game-item';
+                        const host = data?.content?.host || 'unknown';
+                        const status = data?.content?.status || 'unknown';
+                        div.innerHTML = `<b>${g}</b><br>Host: ${host}<br>Status: ${status}`;
+                        if (status === 'waiting' && host !== this.username) {
+                            div.onclick = () => this.joinGame(g);
+                        } else if (status === 'playing') {
+                            div.style.opacity = '0.5';
+                            div.innerHTML += '<br>(In Progress)';
+                        }
+                        list.appendChild(div);
+                    }
+                    if (games.length === 0) list.innerHTML = '<div style="opacity:0.5">No active games</div>';
+                } catch (e) {
+                    console.error(e);
+                }
             }
 
             async createGame() {
-                this.gameId = Math.random().toString(36).substr(2, 8);
+                this.gameId = Math.random().toString(36).substring(2, 8);
                 this.isHost = true;
                 this.myColor = 'white';
                 
                 updateStatus('Creating game...');
-                await this.github.createGame(this.gameId, true);
-                
+                await this.github.createGame(this.gameId);
                 this.startGame();
+                
                 this.p2p = new P2P(this.github, this.gameId, true);
                 this.p2p.connect();
-                this.setupP2PHandler();
+                this.setupP2P();
             }
 
             async joinGame(id) {
@@ -663,77 +737,111 @@
                 
                 const game = await this.github.getGame(id);
                 if (!game || game.content.status !== 'waiting') {
-                    alert('Game not available');
+                    alert('Game no longer available');
+                    this.refreshLobby();
                     return;
                 }
                 
                 updateStatus('Joining game...');
-                await this.github.updateGame(id, game.sha, {...game.content, status: 'playing', guest: true});
-                
+                await this.github.updateGame(id, game.sha, {...game.content, status: 'playing', guest: this.username});
                 this.startGame();
+                
                 this.p2p = new P2P(this.github, this.gameId, false);
                 this.p2p.connect();
-                this.setupP2PHandler();
+                this.setupP2P();
             }
 
             startGame() {
                 document.getElementById('lobby-panel').style.display = 'none';
                 document.getElementById('game-ui').style.display = 'block';
-                document.getElementById('game-id').innerText = `Game: ${this.gameId}`;
+                document.getElementById('game-info').innerText = `Game: ${this.gameId}\nYou: ${this.username} (${this.myColor})`;
                 
                 this.chess.reset();
-                this.scene.loadPieces(this.chess);
+                this.scene.updatePieces(this.chess);
+                this.scene.myColor = this.myColor;
                 this.updateTurnIndicator();
                 
-                // Poll for game state changes (backup sync)
-                this.polling = setInterval(() => this.syncState(), 5000);
+                // Fast polling for ICE candidates and state sync
+                this.polling = setInterval(() => this.syncState(), 1000);
             }
 
-            setupP2PHandler() {
+            setupP2P() {
                 this.p2p.onMove = (data) => {
-                    // Remote move received
-                    this.chess.move(data.from, data.to);
-                    this.scene.updatePieces(this.chess);
-                    this.updateTurnIndicator();
+                    // Remote move
+                    if (data.from && data.to) {
+                        this.chess.move(data.from, data.to);
+                        this.scene.updatePieces(this.chess);
+                        this.updateTurnIndicator();
+                        updateStatus('Opponent moved');
+                    }
                 };
             }
 
             handleLocalMove(from, to) {
-                // Validate it's our turn and our piece
                 const piece = this.chess.board[from.y][from.x];
                 if (!piece || piece.color !== this.myColor) return;
                 if (this.chess.turn !== this.myColor) return;
                 
-                // Optimistic update
                 if (this.chess.move(from, to)) {
+                    // Optimistic update
                     this.scene.updatePieces(this.chess);
                     this.updateTurnIndicator();
+                    this.lastMoveTime = Date.now();
                     
-                    // Send P2P (instant)
+                    // Instant P2P send
                     this.p2p.sendMove({from: {x: from.x, y: from.y}, to});
                     
                     // Async GitHub backup
-                    this.backupMove({from, to});
+                    this.backupMove();
+                    
+                    // Visual feedback
+                    this.scene.highlightSquare(to.x, to.y, 0x00ff00);
                 }
             }
 
-            async backupMove(move) {
+            async backupMove() {
                 try {
                     const game = await this.github.getGame(this.gameId);
-                    const moves = [...game.content.moves, move];
-                    await this.github.updateGame(this.gameId, game.sha, {...game.content, fen: this.chess.getFEN(), moves});
-                } catch (e) {
-                    console.error('Backup failed', e);
-                }
+                    if (!game) return;
+                    const moves = [...(game.content.moves || []), {t: Date.now(), f: this.chess.getFEN()}];
+                    await this.github.updateGame(this.gameId, game.sha, {
+                        ...game.content, 
+                        fen: this.chess.getFEN(), 
+                        moves,
+                        lastActivity: Date.now()
+                    });
+                } catch (e) { console.error('Backup failed', e); }
             }
 
             async syncState() {
-                // Periodic sync with GitHub for durability
-                const game = await this.github.getGame(this.gameId);
-                if (game && game.content.fen !== this.chess.getFEN()) {
-                    this.chess.loadFEN(game.content.fen);
-                    this.scene.updatePieces(this.chess);
-                }
+                try {
+                    const game = await this.github.getGame(this.gameId);
+                    if (!game) return;
+                    
+                    // Check if opponent resigned or game deleted
+                    if (this.isHost && game.content.status === 'ended') {
+                        alert('Game ended');
+                        this.leaveGame();
+                        return;
+                    }
+                    
+                    // If P2P fails, fall back to GitHub for moves (check every 5s)
+                    if (Date.now() - this.lastMoveTime > 5000 && game.content.moves) {
+                        const lastMove = game.content.moves[game.content.moves.length - 1];
+                        if (lastMove && this.chess.getFEN() !== lastMove.f) {
+                            this.chess.loadFEN(lastMove.f);
+                            this.scene.updatePieces(this.chess);
+                            this.updateTurnIndicator();
+                        }
+                    }
+                } catch (e) { console.error(e); }
+            }
+
+            updateTurnIndicator() {
+                const el = document.getElementById('turn-indicator');
+                const isMyTurn = this.chess.turn === this.myColor;
+                el.innerText = `${this.chess.turn.toUpperCase()} TO MOVE${isMyTurn ? ' << YOUR TURN' : ''}`;
+                el.style.color = this.chess.turn === 'white' ? '#fff' : '#888';
             }
 
             async leaveGame() {
@@ -741,16 +849,8 @@
                 try {
                     const game = await this.github.getGame(this.gameId);
                     if (game) await this.github.deleteGame(this.gameId, game.sha);
-                } catch (e) {
-                    console.error(e);
-                }
+                } catch (e) { console.error(e); }
                 location.reload();
-            }
-
-            updateTurnIndicator() {
-                const el = document.getElementById('turn-indicator');
-                el.innerText = `${this.chess.turn.toUpperCase()} TO MOVE${this.chess.turn === this.myColor ? ' (YOU)' : ''}`;
-                el.style.color = this.chess.turn === 'white' ? '#fff' : '#0f0';
             }
         }
 
@@ -759,10 +859,6 @@
         }
 
         window.app = new App();
-        
-        // Auto-fill if saved
-        const saved = localStorage.getItem('gitchess_pat');
-        if (saved) document.getElementById('pat-input').value = '[ENCRYPTED]';
     </script>
 </body>
 </html>
